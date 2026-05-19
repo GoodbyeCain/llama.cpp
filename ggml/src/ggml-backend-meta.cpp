@@ -565,7 +565,11 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(co
             for (int dim = 0; dim < GGML_MAX_DIMS; dim++) {
                 ne_split_dst *= tensor->ne[dim];
                 if (ne_split_dst == ne_split_src) {
-                    return {ggml_backend_meta_split_axis(dim), {0}, 1};
+                    const ggml_backend_meta_split_axis ax = ggml_backend_meta_split_axis(dim);
+                    if (ggml_is_quantized(tensor->type) && ax == GGML_BACKEND_SPLIT_AXIS_0) {
+                        GGML_ASSERT(tensor->ne[0] % ggml_blck_size(tensor->type) == 0);
+                    }
+                    return {ax, {0}, 1};
                 }
             }
         }
@@ -705,6 +709,14 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(co
         GGML_ASSERT(src_ss[0].axis != GGML_BACKEND_SPLIT_AXIS_1);
         GGML_ASSERT(src_ss[1].axis == GGML_BACKEND_SPLIT_AXIS_MIRRORED);
         GGML_ASSERT(split_states_equal(src_ss[0], src_ss[2]));
+        if (ggml_is_quantized(tensor->type) && src_ss[0].axis == GGML_BACKEND_SPLIT_AXIS_0) {
+            // ne[] layout per ggml-backend.h:384 is [seg0_dev0, seg0_dev1, ..., segN_dev0, segN_dev1, ...];
+            // every per-segment-per-device slice must be block-aligned for quantized SET_ROWS to be safe.
+            const int64_t blck = ggml_blck_size(tensor->type);
+            for (size_t sj = 0; sj < size_t(src_ss[0].n_segments) * n_bufs; ++sj) {
+                GGML_ASSERT(src_ss[0].ne[sj] % blck == 0);
+            }
+        }
         return src_ss[0];
     };
 
@@ -727,6 +739,12 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(co
         GGML_ASSERT(                             src_ss[2].axis == GGML_BACKEND_SPLIT_AXIS_2);
         GGML_ASSERT(tensor->src[4] == nullptr || src_ss[3].axis == GGML_BACKEND_SPLIT_AXIS_MIRRORED);
         GGML_ASSERT(tensor->src[4] == nullptr || src_ss[4].axis == GGML_BACKEND_SPLIT_AXIS_0);
+        if (ggml_is_quantized(tensor->src[1]->type)) {
+            GGML_ASSERT(tensor->src[1]->ne[0] % ggml_blck_size(tensor->src[1]->type) == 0);
+        }
+        if (ggml_is_quantized(tensor->src[2]->type)) {
+            GGML_ASSERT(tensor->src[2]->ne[0] % ggml_blck_size(tensor->src[2]->type) == 0);
+        }
         return {GGML_BACKEND_SPLIT_AXIS_1, {0}, 1};
     };
 

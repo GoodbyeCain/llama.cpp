@@ -287,14 +287,25 @@ llama_kv_cache::llama_kv_cache(
         LLAMA_LOG_WARN("%s: attention rotation force disabled (LLAMA_ATTN_ROT_DISABLE)\n", __func__);
     }
 
+    // attention rotation requires K-shift to dequantize, rotate and requantize the K cache;
+    // this path has not been validated across the meta backend used by SPLIT_MODE_TENSOR.
+    const bool split_tensor_quant_kv =
+        model.split_mode() == LLAMA_SPLIT_MODE_TENSOR &&
+        (ggml_is_quantized(type_k) || ggml_is_quantized(type_v));
+    if (split_tensor_quant_kv) {
+        LLAMA_LOG_WARN("%s: attention rotation disabled: SPLIT_MODE_TENSOR + quantized KV cache\n", __func__);
+    }
+
     attn_rot_k =
         !attn_rot_disable &&
+        !split_tensor_quant_kv &&
         n_embd_head_k_all > 0 &&
         ggml_is_quantized(type_k) &&
         hparams.n_embd_head_k() % 64 == 0;
 
     attn_rot_v =
         !attn_rot_disable &&
+        !split_tensor_quant_kv &&
         n_embd_head_v_all > 0 &&
         ggml_is_quantized(type_v) &&
         hparams.n_embd_head_v() % 64 == 0;
@@ -1093,6 +1104,10 @@ bool llama_kv_cache::get_can_shift() const {
         return false;
     }
     if (hparams.n_pos_per_embd() > 1) {
+        return false;
+    }
+    // Quantized K-shift needs the rotation tensor for dequantize/rotate/requantize.
+    if (ggml_is_quantized(type_k()) && !attn_rot_k) {
         return false;
     }
     return true;

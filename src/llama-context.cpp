@@ -3390,9 +3390,15 @@ llama_context * llama_init_from_model(
             LLAMA_LOG_ERROR("%s: SPLIT_MODE_TENSOR requires flash_attn to be enabled\n", __func__);
             return nullptr;
         }
+        // KV cache quantization with SPLIT_MODE_TENSOR is allowed when head_dim aligns with
+        // the quantization block size. The head_dim checks below (FA quantized K/V branch)
+        // still apply; K-shift and defrag are disabled for this combination as they have not
+        // been validated across the meta backend's cross-device dequant/requant path.
         if (ggml_is_quantized(params.type_k) || ggml_is_quantized(params.type_v)) {
-            LLAMA_LOG_ERROR("%s: simultaneous use of SPLIT_MODE_TENSOR and KV cache quantization not implemented\n", __func__);
-            return nullptr;
+            if (params.defrag_thold > 0.0f) {
+                LLAMA_LOG_WARN("%s: defrag disabled: not yet validated with SPLIT_MODE_TENSOR + quantized KV cache\n", __func__);
+                params.defrag_thold = -1.0f;
+            }
         }
     }
 
